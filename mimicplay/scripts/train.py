@@ -37,11 +37,11 @@ import robomimic.utils.train_utils as TrainUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
 import robomimic.utils.env_utils as EnvUtils
-import robomimic.utils.file_utils as FileUtils
 from robomimic.utils.log_utils import PrintLogger, DataLogger
 
 from mimicplay.configs import config_factory
 from mimicplay.algo import algo_factory, RolloutPolicy
+from mimicplay.utils import file_utils as FileUtils
 from mimicplay.utils.train_utils import get_exp_dir, rollout_with_stats, load_data_for_training
 
 def train(config, device):

@@ -54,6 +54,10 @@ class Highlevel_GMM_pretrain(BC_Gaussian):
         assert not self.algo_config.lowlevel.enabled
 
         del self.obs_shapes['robot0_eef_pos_future_traj']
+
+        if not self.algo_config.playdata.enabled:
+            del self.goal_shapes['agentview_image']
+
         self.ac_dim = self.algo_config.highlevel.ac_dim
 
         self.nets = nn.ModuleDict()

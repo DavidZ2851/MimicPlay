@@ -1,0 +1,12 @@
+[submodule "robosuite"]
+	path = robosuite
+	url = https://github.com/ARISE-Initiative/robosuite.git
+[submodule "bddl"]
+	path = bddl
+	url = https://github.com/StanfordVL/bddl.git
+[submodule "LIBERO"]
+	path = LIBERO
+	url = https://github.com/Lifelong-Robot-Learning/LIBERO.git
+[submodule "robomimic"]
+	path = robomimic
+	url = https://github.com/ARISE-Initiative/robomimic
