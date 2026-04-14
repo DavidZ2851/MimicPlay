@@ -229,6 +229,26 @@ class Highlevel_GMM_pretrain(BC_Gaussian):
         if "policy_grad_norms" in info:
             log["Policy_Grad_Norms"] = info["policy_grad_norms"]
         return log
+    
+
+    def get_action(self, obs_dict, goal_dict=None):
+        """
+        Get policy action outputs.
+        
+        Args:
+            obs_dict (dict): current observation
+            goal_dict (dict): (optional) goal
+            
+        Returns:
+            action (torch.Tensor): action tensor
+        """
+        assert not self.nets.training
+        
+        # Use _get_latent_plan which returns (action, mlp_out)
+        # We only need the action (predicted trajectory)
+        action, _ = self._get_latent_plan(obs_dict, goal_dict)
+        
+        return action
 
 
 class Lowlevel_GPT_mimicplay(BC_RNN):
