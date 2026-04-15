@@ -3,8 +3,7 @@
 Merge human and robot HDF5 datasets for MimicPlay.
 
 Usage:
-    python merge_hdf5.py --human human.hdf5:50 --robot robot.hdf5:50 --output merged.hdf5
-    python merge_hdf5.py --human human.hdf5:50 --robot robot.hdf5:50 --robot_val 6,7,8,9 --output merged.hdf5
+    python merge_hdf5.py --human human.hdf5:50 --robot robot.hdf5:25 --robot_val 100-104 --output merged.hdf5
 """
 
 import h5py
@@ -98,32 +97,30 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
         print(f"Available human demos: {len(all_human_demos)}")
         print(f"Available robot demos: {len(all_robot_demos)}")
         
+        # Select human demos (first N)
         if num_human is not None:
             human_demos = all_human_demos[:num_human]
         else:
             human_demos = all_human_demos
         
+        # Select robot TRAIN demos (first N from :N spec)
         if num_robot is not None:
-            robot_demos = all_robot_demos[:num_robot]
+            robot_train_demos = all_robot_demos[:num_robot]
         else:
-            robot_demos = all_robot_demos
+            robot_train_demos = all_robot_demos
         
-        robot_indices = [int(d.split('_')[1]) for d in robot_demos]
-        
-        # Validate val indices (if any)
-        for idx in robot_val_indices:
-            if idx not in robot_indices:
-                raise ValueError(f"robot_val index {idx} not in selected robot demos (0-{len(robot_demos)-1})")
-        
-        robot_train_indices = [i for i in robot_indices if i not in robot_val_indices]
-        
-        robot_train_demos = [f'demo_{i}' for i in robot_train_indices]
+        # Robot VAL demos are selected by index from FULL dataset (not from :N)
         robot_val_demos = [f'demo_{i}' for i in robot_val_indices]
         
+        # Validate val demos exist
+        for demo_name in robot_val_demos:
+            if demo_name not in all_robot_demos:
+                raise ValueError(f"robot_val demo '{demo_name}' not found in robot dataset")
+        
         print(f"\nUsing human demos: {len(human_demos)}")
-        print(f"Using robot demos: {len(robot_demos)} (train: {len(robot_train_demos)}, val: {len(robot_val_demos)})")
+        print(f"Using robot train demos: {len(robot_train_demos)} (demo_0 to demo_{num_robot-1 if num_robot else len(all_robot_demos)-1})")
         if robot_val_indices:
-            print(f"  Val indices: {robot_val_indices}")
+            print(f"Using robot val demos: {len(robot_val_demos)} (indices: {robot_val_indices})")
         
         # Copy human demos
         print("\nCopying human demos...")
@@ -145,7 +142,7 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
             demo_counter += 1
         print(f"  Copied {len(robot_train_demos)} robot train demos")
         
-        # Copy robot val demos (if any)
+        # Copy robot val demos
         if robot_val_demos:
             print("Copying robot val demos...")
             for src_name in robot_val_demos:
@@ -162,19 +159,22 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
         
         f_out['data'].attrs['total'] = total_samples
         
-        env_meta = {
-            "env_name": "Franka_Pick_Place",
-            "env_version": "1.0.0",
-            "type": 1,
-            "env_kwargs": {
-                "robots": ["Panda"],
-                "controller_configs": {"type": "OSC_POSE"},
-                "camera_names": ["agentview"],
-                "camera_heights": 84,
-                "camera_widths": 84,
+        if 'env_args' in f_robot['data'].attrs:
+            f_out['data'].attrs['env_args'] = f_robot['data'].attrs['env_args']
+        else:
+            env_meta = {
+                "env_name": "Franka_Pick_Place",
+                "env_version": "1.0.0",
+                "type": 1,
+                "env_kwargs": {
+                    "robots": ["Panda"],
+                    "controller_configs": {"type": "OSC_POSE"},
+                    "camera_names": ["agentview"],
+                    "camera_heights": 84,
+                    "camera_widths": 84,
+                }
             }
-        }
-        f_out['data'].attrs['env_args'] = json.dumps(env_meta, indent=4)
+            f_out['data'].attrs['env_args'] = json.dumps(env_meta, indent=4)
         
         print("\n" + "=" * 60)
         print(f"Done! Saved to {output_path}")
@@ -189,19 +189,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # No validation set
-  python merge_hdf5.py --human human.hdf5:50 --robot robot.hdf5:50 --output merged.hdf5
-
-  # With validation set
-  python merge_hdf5.py --human human.hdf5:50 --robot robot.hdf5:50 --robot_val 6,7,8,9 --output merged.hdf5
+  # Robot train from :25, robot val from indices 100-104 (from full dataset)
+  python merge_hdf5.py --human human.hdf5:25 --robot robot.hdf5:25 --robot_val 100-104 --output merged.hdf5
         """
     )
     parser.add_argument("--human", type=str, required=True,
                         help="Human dataset (e.g., human.hdf5:50)")
     parser.add_argument("--robot", type=str, required=True,
-                        help="Robot dataset (e.g., robot.hdf5:50)")
+                        help="Robot dataset (e.g., robot.hdf5:25 for first 25 as train)")
     parser.add_argument("--robot_val", type=str, default="",
-                        help="Robot demo indices for validation (e.g., '6,7,8,9' or '6-9'). Optional.")
+                        help="Robot demo indices for validation from FULL dataset")
     parser.add_argument("--output", type=str, required=True, help="Output path")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
