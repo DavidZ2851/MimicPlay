@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Visualize HDF5 dataset with future trajectory projected onto agentview images.
+Visualize HDF5 dataset with future trajectory projected onto agentview images,
+and wrist camera view side by side.
 
 Usage:
     python scripts/visualize_traj.py --dataset converted_robot_dataset.hdf5 --calib cam_calibration.json --demo demo_0 --output output_video.mp4
@@ -147,36 +148,6 @@ def draw_trajectory_on_image(image, points_2d, valid_mask, color_start=(0, 255, 
     return img
 
 
-def draw_eef_position(image, eef_pos, intrinsic, extrinsic, image_size):
-    """
-    Draw current end-effector position on image.
-    
-    Args:
-        image: (H, W, 3) image
-        eef_pos: (3,) end-effector position in world frame
-        intrinsic: (3, 3) camera intrinsic
-        extrinsic: (4, 4) cam to world extrinsic
-        image_size: (width, height)
-    
-    Returns:
-        image with EEF position drawn
-    """
-    img = image.copy()
-    
-    # Transform to camera frame
-    eef_cam = world_to_camera(eef_pos.reshape(1, 3), extrinsic)
-    
-    # Project to image
-    eef_2d, valid = project_to_image(eef_cam, intrinsic, image_size)
-    
-    if valid[0]:
-        pt = tuple(eef_2d[0].astype(int))
-        cv2.circle(img, pt, 8, (0, 255, 255), -1)  # Yellow
-        cv2.circle(img, pt, 8, (0, 0, 0), 2)
-    
-    return img
-
-
 def visualize_demo(dataset_path, calib_path, demo_name, output_path=None, 
                    camera_name="cam1", fps=20, show=False, display_scale=10):
     """
@@ -194,10 +165,25 @@ def visualize_demo(dataset_path, calib_path, demo_name, output_path=None,
         eef_pos = demo['obs/robot0_eef_pos'][:]  # (T, 3)
         future_traj = demo['obs/robot0_eef_pos_future_traj'][:]  # (T, 30)
         
+        # Load wrist camera if available
+        has_wrist = 'obs/robot0_eye_in_hand_image' in demo
+        if has_wrist:
+            wrist_images = demo['obs/robot0_eye_in_hand_image'][:]  # (T, H, W, 3)
+        else:
+            print("Warning: No wrist camera images found in dataset")
+            wrist_images = None
+        
         T, H, W, C = images.shape
         image_size = (W, H)
         display_W = W * display_scale
         display_H = H * display_scale
+        
+        # Combined frame width (agentview + wrist side by side)
+        if has_wrist:
+            combined_W = display_W * 2
+        else:
+            combined_W = display_W
+        combined_H = display_H
         
         # Scale intrinsic for original image
         ORIGINAL_W, ORIGINAL_H = 1280, 720
@@ -216,13 +202,15 @@ def visualize_demo(dataset_path, calib_path, demo_name, output_path=None,
         
         print(f"Processing {demo_name}: {T} frames")
         print(f"Image size: {W}x{H}, Display: {display_W}x{display_H}")
+        print(f"Combined frame: {combined_W}x{combined_H}")
+        print(f"Wrist camera: {'Yes' if has_wrist else 'No'}")
         print(f"Scaled intrinsic:\n{intrinsic_scaled}")
         
-        # Setup video writer with DISPLAY size
+        # Setup video writer with combined size
         video_writer = None
         if output_path:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            video_writer = cv2.VideoWriter(output_path, fourcc, fps, (display_W, display_H))
+            video_writer = cv2.VideoWriter(output_path, fourcc, fps, (combined_W, combined_H))
         
         for t in tqdm(range(T), desc="Rendering frames"):
             # Get current frame (RGB -> BGR for OpenCV)
@@ -251,7 +239,7 @@ def visualize_demo(dataset_path, calib_path, demo_name, output_path=None,
                                             color_start=(0, 255, 0),   # Green (current)
                                             color_end=(0, 0, 255))     # Red (future)
             
-            # Draw current EEF position (need to scale the drawn position too)
+            # Draw current EEF position
             eef_cam = world_to_camera(eef_pos[t].reshape(1, 3), extrinsic)
             eef_2d, eef_valid = project_to_image(eef_cam, intrinsic_scaled, image_size)
             if eef_valid[0]:
@@ -259,19 +247,33 @@ def visualize_demo(dataset_path, calib_path, demo_name, output_path=None,
                 cv2.circle(frame, pt, 8, (0, 255, 255), -1)  # Yellow
                 cv2.circle(frame, pt, 8, (0, 0, 0), 2)
             
-            # Add text overlay
-            cv2.putText(frame, f"Frame: {t}/{T}", (10, 30), 
+            # Add text overlay on agentview
+            cv2.putText(frame, f"Agentview - Frame: {t}/{T}", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             cv2.putText(frame, f"EEF: [{eef_pos[t, 0]:.3f}, {eef_pos[t, 1]:.3f}, {eef_pos[t, 2]:.3f}]",
                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
+            # Process wrist camera
+            if has_wrist:
+                wrist_frame = cv2.cvtColor(wrist_images[t], cv2.COLOR_RGB2BGR)
+                wrist_frame = cv2.resize(wrist_frame, (display_W, display_H), interpolation=cv2.INTER_NEAREST)
+                
+                # Add text overlay on wrist
+                cv2.putText(wrist_frame, "Wrist Camera", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                # Combine frames side by side
+                combined_frame = np.hstack([frame, wrist_frame])
+            else:
+                combined_frame = frame
+            
             # Write frame
             if video_writer:
-                video_writer.write(frame)
+                video_writer.write(combined_frame)
             
             # Show frame
             if show:
-                cv2.imshow('Trajectory Visualization', frame)
+                cv2.imshow('Trajectory Visualization', combined_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         
@@ -299,6 +301,8 @@ def main():
                         help="Output video FPS")
     parser.add_argument("--show", action="store_true",
                         help="Show frames in window")
+    parser.add_argument("--display_scale", type=int, default=10,
+                        help="Scale factor for display")
     parser.add_argument("--original_width", type=int, default=1280,
                         help="Original image width before resize")
     parser.add_argument("--original_height", type=int, default=720,
@@ -313,7 +317,8 @@ def main():
         output_path=args.output,
         camera_name=args.camera,
         fps=args.fps,
-        show=args.show
+        show=args.show,
+        display_scale=args.display_scale
     )
 
 

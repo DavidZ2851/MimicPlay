@@ -128,7 +128,8 @@ class Highlevel_GMM_pretrain(BC_Gaussian):
 
             for item in ['agentview_image']:
                 obs[item] = obs[item].view(bs * seq, c, h, w)
-                goal[item] = goal[item].view(bs * seq, c, h, w)
+                if goal:
+                    goal[item] = goal[item].view(bs * seq, c, h, w)
 
             obs['robot0_eef_pos'] = obs['robot0_eef_pos'].view(bs * seq, 3)
 
@@ -143,7 +144,8 @@ class Highlevel_GMM_pretrain(BC_Gaussian):
 
             for item in ['agentview_image']:
                 obs[item] = obs[item].view(bs, seq, c, h, w)
-                goal[item] = goal[item].view(bs, seq, c, h, w)
+                if goal:
+                    goal[item] = goal[item].view(bs, seq, c, h, w)
 
             obs['robot0_eef_pos'] = obs['robot0_eef_pos'].view(bs, seq, 3)
 

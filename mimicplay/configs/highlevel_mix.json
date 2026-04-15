@@ -160,7 +160,7 @@
             "eval_max_goal_img_iter": 5
         },
         "playdata": {
-            "enabled": true,
+            "enabled": false,
             "goal_image_range": [10, 20],
             "eval_goal_gap": 15
         }

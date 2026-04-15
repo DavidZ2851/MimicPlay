@@ -25,7 +25,7 @@
         "keep_all_videos": false,
         "video_skip": 5,
         "rollout": {
-            "enabled": true,
+            "enabled": false,
             "n": 10,
             "horizon": 1600,
             "rate": 50,
@@ -155,14 +155,14 @@
             "spatial_softmax_num_kp": 64,
             "gmm_min_std": 0.0001,
             "dropout": 0.1,
-            "trained_highlevel_planner": "checkpoints/highlevel_model_epoch_357_best_validation_-65.05948219299316.pth",
+            "trained_highlevel_planner": "/home/haotian/MimicPlay/trained_models_highlevel/test/20260413192033/models/model_epoch_3000.pth",
             "eval_goal_img_window": 30,
             "eval_max_goal_img_iter": 5
         },
         "playdata": {
-            "enabled": true,
-            "goal_image_range": [100, 200],
-            "eval_goal_gap": 150
+            "enabled": false,
+            "goal_image_range": [10, 20],
+            "eval_goal_gap": 15
         }
     },
     "observation": {

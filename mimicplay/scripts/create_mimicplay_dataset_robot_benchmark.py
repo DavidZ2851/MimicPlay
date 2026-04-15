@@ -6,9 +6,11 @@ Input structure:
     /home/haotian/polaris/data/pick_place_red_mug_200/
     ├── episode_000031/
     │   ├── cam1.mp4
+    │   ├── wrist_cam.mp4
     │   └── trajectory.npz
     ├── episode_000032/
     │   ├── cam1.mp4
+    │   ├── wrist_cam.mp4
     │   └── trajectory.npz
     ...
 
@@ -21,6 +23,7 @@ import argparse
 import numpy as np
 import h5py
 import cv2
+import json
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
 
@@ -56,7 +59,7 @@ def get_future_points(arr):
 
     return future_traj
 
-def center_crop_square(frame, pixel_shift = 0):
+def center_crop_square(frame, pixel_shift=0):
     """Center-crop a frame to a square based on the smaller side."""
     h, w = frame.shape[:2]
     side = min(h, w)
@@ -65,7 +68,7 @@ def center_crop_square(frame, pixel_shift = 0):
     return frame[y1:y1 + side, x1:x1 + side]
 
 
-def extract_frames_from_video(video_path, num_frames, target_size=(84, 84)):
+def extract_frames_from_video(video_path, num_frames, target_size=(84, 84), pixel_shift=0):
     """
     Extract frames from video, crop to square, and resize.
     
@@ -73,6 +76,7 @@ def extract_frames_from_video(video_path, num_frames, target_size=(84, 84)):
         video_path: Path to video file
         num_frames: Number of frames to extract (should match trajectory length)
         target_size: (width, height) to resize to
+        pixel_shift: Horizontal pixel shift for center crop
     
     Returns:
         numpy array of shape (num_frames, H, W, 3) with uint8 dtype
@@ -111,7 +115,7 @@ def extract_frames_from_video(video_path, num_frames, target_size=(84, 84)):
             # Convert BGR to RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             # Crop to square
-            frame = center_crop_square(frame, pixel_shift= PIXEL_SHIFT)
+            frame = center_crop_square(frame, pixel_shift=pixel_shift)
             # Resize
             frame = cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
             frames.append(frame)
@@ -141,8 +145,17 @@ def process_episode(episode_dir, target_size=(84, 84)):
     
     T = states_ee.shape[0]
     
+    # Extract agentview images (cam1) with pixel shift
     video_path = os.path.join(episode_dir, "cam1.mp4")
-    images = extract_frames_from_video(video_path, T, target_size)
+    images = extract_frames_from_video(video_path, T, target_size, pixel_shift=PIXEL_SHIFT)
+    
+    # Extract eye-in-hand images (wrist_cam) with pixel shift
+    wrist_video_path = os.path.join(episode_dir, "wrist_cam.mp4")
+    if os.path.exists(wrist_video_path):
+        wrist_images = extract_frames_from_video(wrist_video_path, T, target_size, pixel_shift=PIXEL_SHIFT)
+    else:
+        print(f"Warning: wrist_cam.mp4 not found in {episode_dir}, using zeros")
+        wrist_images = np.zeros((T, target_size[1], target_size[0], 3), dtype=np.uint8)
     
     # Parse states_ee: position(3) + quaternion(4) + gripper(1)
     eef_pos = states_ee[:, :3]      # (T-1, 3)
@@ -169,6 +182,7 @@ def process_episode(episode_dir, target_size=(84, 84)):
         'states': states_ee, # T-1, 8
         'obs': {
             'agentview_image': images, # T-1, H, W, 3
+            'robot0_eye_in_hand_image': wrist_images,  # T-1, H, W, 3
             'robot0_eef_pos': eef_pos, # T-1, 3
             'robot0_eef_quat': eef_quat, # T-1, 4
             'robot0_gripper_qpos': gripper, # T-1, 2
@@ -221,6 +235,20 @@ def convert_to_hdf5(data_dir, output_path, target_size=(84, 84), val_ratio=0):
         # Create data group
         data_grp = f.create_group("data")
         
+        env_meta = {
+            "env_name": "Franka_Pick_Place",
+            "env_version": "1.0.0",
+            "type": 1,
+            "env_kwargs": {
+                "robots": ["Panda"],
+                "controller_configs": {"type": "OSC_POSE"},
+                "camera_names": ["agentview"],
+                "camera_heights": 84,
+                "camera_widths": 84,
+            }
+        }
+        data_grp.attrs['env_args'] = json.dumps(env_meta, indent=4)
+
         # Process each episode
         demo_names = []
         total_samples = 0
@@ -267,6 +295,8 @@ def convert_to_hdf5(data_dir, output_path, target_size=(84, 84), val_ratio=0):
         
         mask_grp.create_dataset("train", data=train_demos)
         mask_grp.create_dataset("valid", data=valid_demos)
+    
+
     
     print(f"\nDone! Created {output_path}")
     print(f"  Total episodes: {len(demo_names)}")

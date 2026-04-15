@@ -176,25 +176,27 @@ def eval_highlevel_on_dataset(args):
             for t in tqdm(range(0, T, args.skip_frames), desc=demo_name):
                 img = images[t]
                 img = cv2.resize(img, (args.img_size, args.img_size), interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1)
+                img = img.astype(np.float32) / 255.0
 
                 obs = {
-                    'agentview_image': img,
-                    'robot0_eef_pos': eef_pos[t],
-                    'robot0_eef_pos_future_traj': gt_future_traj[t],
+                    'agentview_image': torch.from_numpy(img).unsqueeze(0).to(device),
+                    'robot0_eef_pos': torch.from_numpy(eef_pos[t].astype(np.float32)).unsqueeze(0).to(device),
                 }
+
 
                 goal = None
                 if args.goal:
-                    goal_idx = min(t + 150, T - 1)  # 150 frames ahead, or last frame
+                    goal_idx = min(t + 15, T - 1)  # 15 frames ahead, or last frame
                     goal_img = images[goal_idx]
                     goal_img_resized = cv2.resize(goal_img, (args.img_size, args.img_size), interpolation=cv2.INTER_LINEAR).transpose(2, 0, 1)
+                    goal_img_resized = goal_img_resized.astype(np.float32) / 255.0
 
                     goal = {
-                        'agentview_image': goal_img_resized,
+                        'agentview_image': torch.from_numpy(goal_img_resized).unsqueeze(0).to(device),  # add batch dim
                     }
                 else:
                     goal = None
-                
+
                 with torch.no_grad():
                     pred_traj = policy(ob=obs, goal=goal)
                 
@@ -262,8 +264,27 @@ def eval_highlevel_on_dataset(args):
     
     # Compute statistics
     l2_errors = np.array(results['l2_errors'])
+
+    if results['l2_errors_per_point']:
+        per_point = np.array(results['l2_errors_per_point'])  # (N, 10) - L2 error per point
+        
+        # RMSE per point (sqrt of mean squared L2 error for each waypoint)
+        rmse_per_point = np.sqrt(np.mean(per_point ** 2, axis=0))  # (10,)
+        
+        # Overall RMSE (across all points and samples)
+        rmse_overall = np.sqrt(np.mean(per_point ** 2))
+        
+        # Mean L2 error per point
+        mean_per_point = per_point.mean(axis=0)
+        std_per_point = per_point.std(axis=0)
+    else:
+        rmse_per_point = None
+        rmse_overall = np.sqrt(np.mean(l2_errors ** 2))
+        mean_per_point = None
+        std_per_point = None
     
     stats = {
+        'rmse_overall': float(rmse_overall),
         'mean_l2_error': float(np.mean(l2_errors)),
         'std_l2_error': float(np.std(l2_errors)),
         'median_l2_error': float(np.median(l2_errors)),
@@ -273,10 +294,10 @@ def eval_highlevel_on_dataset(args):
         'num_demos': len(demos),
     }
     
-    if results['l2_errors_per_point']:
-        per_point = np.array(results['l2_errors_per_point'])
-        stats['per_point_mean'] = per_point.mean(axis=0).tolist()
-        stats['per_point_std'] = per_point.std(axis=0).tolist()
+    if rmse_per_point is not None:
+        stats['rmse_per_point'] = rmse_per_point.tolist()
+        stats['per_point_mean'] = mean_per_point.tolist()
+        stats['per_point_std'] = std_per_point.tolist()
     
     # Print results
     print("\n" + "=" * 60)
@@ -284,6 +305,7 @@ def eval_highlevel_on_dataset(args):
     print("=" * 60)
     print(f"  Validation demos:  {len(demos)}")
     print(f"  Samples evaluated: {stats['num_samples']}")
+    print(f"  RMSE (overall):    {stats['rmse_overall']:.4f}")
     print(f"  Mean L2 Error:     {stats['mean_l2_error']:.4f}")
     print(f"  Std L2 Error:      {stats['std_l2_error']:.4f}")
     print(f"  Median L2 Error:   {stats['median_l2_error']:.4f}")
@@ -292,6 +314,11 @@ def eval_highlevel_on_dataset(args):
         print("\n  Per-point mean errors (future points 1-10):")
         for i, (mean, std) in enumerate(zip(stats['per_point_mean'], stats['per_point_std'])):
             print(f"    Point {i+1}: {mean:.4f} ± {std:.4f}")
+    
+    if rmse_per_point is not None:
+        print("\n  Per-point RMSE (future points 1-10):")
+        for i, rmse in enumerate(stats['rmse_per_point']):
+            print(f"    Point {i+1}: RMSE={rmse:.4f}, Mean={mean_per_point[i]:.4f} ± {std_per_point[i]:.4f}")
     
     if args.results_output is not None:
         with open(args.results_output, 'w') as f:
