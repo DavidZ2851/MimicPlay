@@ -340,6 +340,10 @@ def main(args):
     if args.name is not None:
         config.experiment.name = args.name
 
+    if args.hl_path is not None:
+        assert config.algo.lowlevel.enabled
+        config.algo.lowlevel.trained_highlevel_planner = args.hl_path
+
     # get torch device
     device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
 
@@ -421,6 +425,13 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="(optional) if provided, a task video prompt is loaded and used in the evaluation rollouts",
+    )
+
+    parser.add_argument(
+        "--hl_path",
+        type=str,
+        default=None,
+        help="path of hl checkpoint",
     )
 
     # debug mode
