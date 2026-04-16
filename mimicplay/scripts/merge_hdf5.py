@@ -9,7 +9,7 @@ Usage:
     # Replicate from existing summary JSON:
     python merge_hdf5.py merge --human human.hdf5 --robot robot.hdf5 --human_json summary.json --robot_json summary.json --output merged.hdf5
 
-    # Extract only robot_train demos from a summary JSON:
+    # Extract only robot_train demos from a summary JSON (copies ALL keys/obs):
     python merge_hdf5.py extract_robot_train --json summary.json --output robot_train_only.hdf5
     python merge_hdf5.py extract_robot_train --json summary.json --output robot_train_only.hdf5 --robot /new/path/robot.hdf5
 """
@@ -89,6 +89,10 @@ def load_indices_from_json(json_path: str, source_type: str) -> list:
 
 
 def copy_demo(src_file, dst_file, src_demo_name, dst_demo_name):
+    """
+    Copy a demo with a fixed set of obs keys (used by merge).
+    Only copies: robot0_eef_pos, robot0_eef_pos_future_traj, agentview_image.
+    """
     src_demo = src_file[f'data/{src_demo_name}']
     dst_demo = dst_file.create_group(f'data/{dst_demo_name}')
 
@@ -116,6 +120,37 @@ def copy_demo(src_file, dst_file, src_demo_name, dst_demo_name):
                            data=src_obs['robot0_eef_pos_future_traj'][:].astype(np.float32))
     dst_obs.create_dataset('agentview_image',
                            data=src_obs['agentview_image'][:].astype(np.uint8))
+
+    return dst_demo.attrs.get('num_samples', src_demo['actions'].shape[0])
+
+
+def copy_demo_full(src_file, dst_file, src_demo_name, dst_demo_name):
+    """
+    Copy a demo preserving ALL datasets, groups, and attributes recursively.
+    Used by extract_robot_train — keeps every obs key (ee_pos, ee_quat,
+    joint_pos, joint_vel, agentview_image, etc.) exactly as-is.
+    """
+    src_demo = src_file[f'data/{src_demo_name}']
+    dst_demo = dst_file.create_group(f'data/{dst_demo_name}')
+
+    # Copy demo-level attributes
+    for k, v in src_demo.attrs.items():
+        dst_demo.attrs[k] = v
+
+    def _copy_group(src_grp, dst_grp):
+        for key in src_grp.keys():
+            item = src_grp[key]
+            if isinstance(item, h5py.Dataset):
+                ds = dst_grp.create_dataset(key, data=item[:])
+                for ak, av in item.attrs.items():
+                    ds.attrs[ak] = av
+            elif isinstance(item, h5py.Group):
+                grp = dst_grp.create_group(key)
+                for ak, av in item.attrs.items():
+                    grp.attrs[ak] = av
+                _copy_group(item, grp)
+
+    _copy_group(src_demo, dst_demo)
 
     return dst_demo.attrs.get('num_samples', src_demo['actions'].shape[0])
 
@@ -321,13 +356,15 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path,
 
 def extract_robot_train(json_path: str, output_path: str, robot_path: str = None):
     """
-    Read a summary JSON and copy only robot_train demos into a new HDF5.
+    Read a summary JSON and copy only robot_train demos into a new HDF5,
+    preserving ALL datasets, groups, and obs keys (ee_pos, ee_quat,
+    joint_pos, joint_vel, agentview_image, etc.) exactly as-is.
 
     Args:
         json_path:   Path to the summary JSON file
         output_path: Path for the output HDF5
         robot_path:  Optional override for the robot HDF5 path.
-                     If None, uses the path from the JSON's sources.robot field.
+                     If None, uses sources.robot from the JSON.
     """
     with open(json_path, 'r') as f:
         summary = json.load(f)
@@ -352,11 +389,15 @@ def extract_robot_train(json_path: str, output_path: str, robot_path: str = None
 
         f_out.create_group('data')
 
+        # Copy top-level data group attributes (env_args, etc.)
+        for k, v in f_src['data'].attrs.items():
+            f_out['data'].attrs[k] = v
+
         for new_idx, entry in enumerate(train_entries):
             src_demo = entry["source_demo"]
             dst_demo = f"demo_{new_idx}"
 
-            n_samples = copy_demo(f_src, f_out, src_demo, dst_demo)
+            n_samples = copy_demo_full(f_src, f_out, src_demo, dst_demo)
             train_names.append(dst_demo)
             total_samples += n_samples
 
@@ -376,9 +417,6 @@ def extract_robot_train(json_path: str, output_path: str, robot_path: str = None
         mask_grp.create_dataset('valid', data=np.array([], dtype='S10'))
 
         f_out['data'].attrs['total'] = total_samples
-
-        if 'env_args' in f_src['data'].attrs:
-            f_out['data'].attrs['env_args'] = f_src['data'].attrs['env_args']
 
     print(f"\nDone! {len(train_names)} demos saved to: {output_path}")
     print(f"Total samples: {total_samples}")
@@ -419,7 +457,7 @@ Examples:
     # --- extract_robot_train subcommand ---
     p_extract = subparsers.add_parser(
         "extract_robot_train",
-        help="Extract only robot_train demos from a summary JSON into a new HDF5",
+        help="Extract robot_train demos from a summary JSON into a new HDF5 (copies ALL keys)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
