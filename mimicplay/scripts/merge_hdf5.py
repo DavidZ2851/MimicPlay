@@ -97,15 +97,15 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
         print(f"Available human demos: {len(all_human_demos)}")
         print(f"Available robot demos: {len(all_robot_demos)}")
         
-        # Select human demos (first N)
+        # Select human demos (random N)
         if num_human is not None:
-            human_demos = all_human_demos[:num_human]
+            human_demos = random.sample(all_human_demos, min(num_human, len(all_human_demos)))
         else:
             human_demos = all_human_demos
-        
-        # Select robot TRAIN demos (first N from :N spec)
+
+        # Select robot TRAIN demos (random N)
         if num_robot is not None:
-            robot_train_demos = all_robot_demos[:num_robot]
+            robot_train_demos = random.sample(all_robot_demos, min(num_robot, len(all_robot_demos)))
         else:
             robot_train_demos = all_robot_demos
         
