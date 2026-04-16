@@ -9,7 +9,7 @@ Usage:
     # Replicate from existing summary JSON:
     python merge_hdf5.py merge --human human.hdf5 --robot robot.hdf5 --human_json summary.json --robot_json summary.json --output merged.hdf5
 
-    # Extract only robot_train demos from a summary JSON (copies ALL keys/obs):
+    # Extract robot_train + robot_val demos from a summary JSON (copies ALL keys/obs):
     python merge_hdf5.py extract_robot_train --json summary.json --output robot_train_only.hdf5
     python merge_hdf5.py extract_robot_train --json summary.json --output robot_train_only.hdf5 --robot /new/path/robot.hdf5
 """
@@ -356,9 +356,12 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path,
 
 def extract_robot_train(json_path: str, output_path: str, robot_path: str = None):
     """
-    Read a summary JSON and copy only robot_train demos into a new HDF5,
-    preserving ALL datasets, groups, and obs keys (ee_pos, ee_quat,
+    Read a summary JSON and copy both robot_train AND robot_val demos into a
+    new HDF5, preserving ALL datasets, groups, and obs keys (ee_pos, ee_quat,
     joint_pos, joint_vel, agentview_image, etc.) exactly as-is.
+
+    robot_train demos → mask/train
+    robot_val   demos → mask/valid
 
     Args:
         json_path:   Path to the summary JSON file
@@ -372,17 +375,20 @@ def extract_robot_train(json_path: str, output_path: str, robot_path: str = None
     src_robot_path = robot_path or summary["sources"]["robot"]
 
     train_entries = [e for e in summary["demo_mapping"] if e["source_type"] == "robot_train"]
+    val_entries   = [e for e in summary["demo_mapping"] if e["source_type"] == "robot_val"]
 
-    if not train_entries:
-        raise ValueError("No robot_train demos found in the JSON.")
+    if not train_entries and not val_entries:
+        raise ValueError("No robot_train or robot_val demos found in the JSON.")
 
-    print(f"Found {len(train_entries)} robot_train demos to copy.")
+    print(f"Found {len(train_entries)} robot_train demos and {len(val_entries)} robot_val demos to copy.")
     print(f"Source HDF5 : {src_robot_path}")
     print(f"Output HDF5 : {output_path}")
 
     demo_mapping  = []
     train_names   = []
+    val_names     = []
     total_samples = 0
+    demo_counter  = 0
 
     with h5py.File(src_robot_path, 'r') as f_src, \
          h5py.File(output_path, 'w') as f_out:
@@ -393,13 +399,16 @@ def extract_robot_train(json_path: str, output_path: str, robot_path: str = None
         for k, v in f_src['data'].attrs.items():
             f_out['data'].attrs[k] = v
 
-        for new_idx, entry in enumerate(train_entries):
+        # --- robot_train ---
+        print("\nCopying robot_train demos...")
+        for entry in train_entries:
             src_demo = entry["source_demo"]
-            dst_demo = f"demo_{new_idx}"
+            dst_demo = f"demo_{demo_counter}"
 
             n_samples = copy_demo_full(f_src, f_out, src_demo, dst_demo)
             train_names.append(dst_demo)
             total_samples += n_samples
+            demo_counter += 1
 
             demo_mapping.append({
                 "output_demo":    dst_demo,
@@ -409,17 +418,41 @@ def extract_robot_train(json_path: str, output_path: str, robot_path: str = None
                 "split":          "train",
                 "num_samples":    int(n_samples),
             })
-
             print(f"  {src_demo} -> {dst_demo}  ({n_samples} samples)")
 
+        # --- robot_val ---
+        print("\nCopying robot_val demos...")
+        for entry in val_entries:
+            src_demo = entry["source_demo"]
+            dst_demo = f"demo_{demo_counter}"
+
+            n_samples = copy_demo_full(f_src, f_out, src_demo, dst_demo)
+            val_names.append(dst_demo)
+            total_samples += n_samples
+            demo_counter += 1
+
+            demo_mapping.append({
+                "output_demo":    dst_demo,
+                "source_dataset": src_robot_path,
+                "source_demo":    src_demo,
+                "source_type":    "robot_val",
+                "split":          "valid",
+                "num_samples":    int(n_samples),
+            })
+            print(f"  {src_demo} -> {dst_demo}  ({n_samples} samples)")
+
+        # masks
         mask_grp = f_out.create_group('mask')
         mask_grp.create_dataset('train', data=[s.encode('utf-8') for s in train_names])
-        mask_grp.create_dataset('valid', data=np.array([], dtype='S10'))
+        mask_grp.create_dataset('valid', data=[s.encode('utf-8') for s in val_names])
 
         f_out['data'].attrs['total'] = total_samples
 
-    print(f"\nDone! {len(train_names)} demos saved to: {output_path}")
-    print(f"Total samples: {total_samples}")
+    print(f"\n{'=' * 60}")
+    print(f"Done! {demo_counter} demos saved to: {output_path}")
+    print(f"  Train : {len(train_names)}")
+    print(f"  Valid : {len(val_names)}")
+    print(f"  Total samples: {total_samples}")
 
     save_summary(output_path, "", src_robot_path, demo_mapping, seed=summary.get("seed", 0))
 
@@ -457,12 +490,12 @@ Examples:
     # --- extract_robot_train subcommand ---
     p_extract = subparsers.add_parser(
         "extract_robot_train",
-        help="Extract robot_train demos from a summary JSON into a new HDF5 (copies ALL keys)",
+        help="Extract robot_train + robot_val demos from a summary JSON into a new HDF5 (copies ALL keys)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python merge_hdf5.py extract_robot_train --json summary.json --output robot_train_only.hdf5
-  python merge_hdf5.py extract_robot_train --json summary.json --output robot_train_only.hdf5 --robot /new/path/robot.hdf5
+  python merge_hdf5.py extract_robot_train --json summary.json --output robot_only.hdf5
+  python merge_hdf5.py extract_robot_train --json summary.json --output robot_only.hdf5 --robot /new/path/robot.hdf5
         """
     )
     p_extract.add_argument("--json",   type=str, required=True, help="Path to summary JSON file")
