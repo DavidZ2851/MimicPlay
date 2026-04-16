@@ -11,17 +11,30 @@ import numpy as np
 import argparse
 import json
 import random
+import os
 
 
 def parse_input_spec(spec: str) -> tuple:
+    """
+    Parse input spec. Supports:
+      - path.hdf5           → (path, None, None)  # use all
+      - path.hdf5:50        → (path, 50, None)    # random sample 50
+      - path.hdf5:0,1,2,3   → (path, None, [0,1,2,3])  # specific indices
+      - path.hdf5:0-4,10-14 → (path, None, [0,1,2,3,4,10,11,12,13,14])  # index ranges
+    """
     if ":" in spec:
         path_str, count_str = spec.rsplit(":", 1)
         if count_str.lower() == "all":
-            return path_str, None
+            return path_str, None, None
+        # Check if it's a single integer (random sample count)
+        elif count_str.isdigit():
+            return path_str, int(count_str), None
+        # Otherwise, parse as index list (e.g., "0,1,2,3" or "0-4,10-14")
         else:
-            return path_str, int(count_str)
+            indices = parse_demo_indices(count_str)
+            return path_str, None, indices
     else:
-        return spec, None
+        return spec, None, None
 
 
 def parse_demo_indices(spec: str) -> list:
@@ -73,12 +86,39 @@ def copy_demo(src_file, dst_file, src_demo_name, dst_demo_name):
     return dst_demo.attrs.get('num_samples', src_demo['actions'].shape[0])
 
 
+def save_summary(output_path, human_path, robot_path, demo_mapping, seed):
+    """Save a JSON summary of the dataset merge."""
+    summary_path = os.path.splitext(output_path)[0] + "_summary.json"
+    
+    summary = {
+        "seed": seed,
+        "sources": {
+            "human": human_path,
+            "robot": robot_path,
+        },
+        "statistics": {
+            "total_demos": len(demo_mapping),
+            "human_demos": sum(1 for d in demo_mapping if d["source_type"] == "human"),
+            "robot_train_demos": sum(1 for d in demo_mapping if d["source_type"] == "robot_train"),
+            "robot_val_demos": sum(1 for d in demo_mapping if d["source_type"] == "robot_val"),
+        },
+        "demo_mapping": demo_mapping,
+    }
+    
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    print(f"  Summary saved to: {summary_path}")
+
+
 def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=42):
     random.seed(seed)
     np.random.seed(seed)
     
-    human_path, num_human = parse_input_spec(human_spec)
-    robot_path, num_robot = parse_input_spec(robot_spec)
+    human_path, num_human, human_indices = parse_input_spec(human_spec)
+    robot_path, num_robot, robot_indices = parse_input_spec(robot_spec)
+    
+    demo_mapping = []  # Track source of each demo
     
     with h5py.File(human_path, 'r') as f_human, \
          h5py.File(robot_path, 'r') as f_robot, \
@@ -98,15 +138,25 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
         print(f"Available robot demos: {len(all_robot_demos)}")
         
         # Select human demos (random N)
-        if num_human is not None:
+        if human_indices is not None:
+            # Specific indices provided
+            human_demos = [f'demo_{i}' for i in human_indices]
+        elif num_human is not None:
+            # Random sample N
             human_demos = random.sample(all_human_demos, min(num_human, len(all_human_demos)))
         else:
+            # Use all
             human_demos = all_human_demos
 
-        # Select robot TRAIN demos (random N)
-        if num_robot is not None:
+        # Select robot TRAIN demos
+        if robot_indices is not None:
+            # Specific indices provided
+            robot_train_demos = [f'demo_{i}' for i in robot_indices]
+        elif num_robot is not None:
+            # Random sample N
             robot_train_demos = random.sample(all_robot_demos, min(num_robot, len(all_robot_demos)))
         else:
+            # Use all
             robot_train_demos = all_robot_demos
         
         # Robot VAL demos are selected by index from FULL dataset (not from :N)
@@ -118,7 +168,7 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
                 raise ValueError(f"robot_val demo '{demo_name}' not found in robot dataset")
         
         print(f"\nUsing human demos: {len(human_demos)}")
-        print(f"Using robot train demos: {len(robot_train_demos)} (demo_0 to demo_{num_robot-1 if num_robot else len(all_robot_demos)-1})")
+        print(f"Using robot train demos: {len(robot_train_demos)}")
         if robot_val_indices:
             print(f"Using robot val demos: {len(robot_val_demos)} (indices: {robot_val_indices})")
         
@@ -129,6 +179,16 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
             n_samples = copy_demo(f_human, f_out, src_name, dst_name)
             train_demo_names.append(dst_name)
             total_samples += n_samples
+            
+            demo_mapping.append({
+                "output_demo": dst_name,
+                "source_dataset": human_path,
+                "source_demo": src_name,
+                "source_type": "human",
+                "split": "train",
+                "num_samples": n_samples,
+            })
+            
             demo_counter += 1
         print(f"  Copied {len(human_demos)} human demos")
         
@@ -139,6 +199,16 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
             n_samples = copy_demo(f_robot, f_out, src_name, dst_name)
             train_demo_names.append(dst_name)
             total_samples += n_samples
+            
+            demo_mapping.append({
+                "output_demo": dst_name,
+                "source_dataset": robot_path,
+                "source_demo": src_name,
+                "source_type": "robot_train",
+                "split": "train",
+                "num_samples": n_samples,
+            })
+            
             demo_counter += 1
         print(f"  Copied {len(robot_train_demos)} robot train demos")
         
@@ -149,6 +219,16 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
                 dst_name = f'demo_{demo_counter}'
                 n_samples = copy_demo(f_robot, f_out, src_name, dst_name)
                 val_demo_names.append(dst_name)
+                
+                demo_mapping.append({
+                    "output_demo": dst_name,
+                    "source_dataset": robot_path,
+                    "source_demo": src_name,
+                    "source_type": "robot_val",
+                    "split": "valid",
+                    "num_samples": n_samples,
+                })
+                
                 demo_counter += 1
             print(f"  Copied {len(robot_val_demos)} robot val demos")
         
@@ -181,6 +261,9 @@ def merge_datasets(human_spec, robot_spec, robot_val_indices, output_path, seed=
         print(f"  Total demos: {demo_counter}")
         print(f"  Training: {len(train_demo_names)} (human: {len(human_demos)}, robot: {len(robot_train_demos)})")
         print(f"  Validation: {len(val_demo_names)}")
+    
+    # Save summary after closing HDF5 files
+    save_summary(output_path, human_path, robot_path, demo_mapping, seed)
 
 
 def main():
@@ -188,10 +271,10 @@ def main():
         description="Merge human and robot HDF5 datasets",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Robot train from :25, robot val from indices 100-104 (from full dataset)
-  python merge_hdf5.py --human human.hdf5:25 --robot robot.hdf5:25 --robot_val 100-104 --output merged.hdf5
-        """
+    Examples:
+    # Robot train from :25, robot val from indices 100-104 (from full dataset)
+    python merge_hdf5.py --human human.hdf5:25 --robot robot.hdf5:25 --robot_val 100-104 --output merged.hdf5
+            """
     )
     parser.add_argument("--human", type=str, required=True,
                         help="Human dataset (e.g., human.hdf5:50)")
