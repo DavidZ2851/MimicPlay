@@ -465,7 +465,7 @@ class RolloutPolicy(object):
         """Pretty print network description"""
         return self.policy.__repr__()
 
-    def __call__(self, ob, goal=None):
+    def __call__(self, ob, goal=None, return_guidance=False):
         """
         Produce action from raw observation dict (and maybe goal dict) from environment.
 
@@ -473,9 +473,19 @@ class RolloutPolicy(object):
             ob (dict): single observation dictionary from environment (no batch dimension,
                 and np.array values for each key)
             goal (dict): goal observation
+            return_guidance (bool): if True, also return future EE trajectory from inner policy
         """
         ob = self._prepare_observation(ob)
         if goal is not None:
             goal = self._prepare_observation(goal)
-        ac = self.policy.get_action(obs_dict=ob, goal_dict=goal)
-        return TensorUtils.to_numpy(ac[0])
+        if return_guidance:
+            ac, guidance = self.policy.get_action(obs_dict=ob, goal_dict=goal, return_guidance=True)
+        else:
+            ac = self.policy.get_action(obs_dict=ob, goal_dict=goal, return_guidance=False)
+        action = TensorUtils.to_numpy(ac[0])
+
+        if return_guidance:
+            guidance = TensorUtils.to_numpy(guidance)
+            return action, guidance
+        else:
+            return action

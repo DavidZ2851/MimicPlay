@@ -401,31 +401,40 @@ class Lowlevel_GPT_mimicplay(BC_RNN):
             log["Policy_Grad_Norms"] = info["policy_grad_norms"]
         return log
 
-    def get_action(self, obs_dict, goal_dict=None):
+    def get_action(self, obs_dict, goal_dict=None, return_guidance=False):
         """
         Get policy action outputs.
         Args:
             obs_dict (dict): current observation
             goal_dict (dict): (optional) goal
+            return_guidance (bool): whether to return guidance
         Returns:
             action (torch.Tensor): action tensor
+            guidance (torch.Tensor): guidance tensor (optional)
+
         """
         assert not self.nets.training
 
         obs_to_use = obs_dict
 
         with torch.no_grad():
-            self.goal_id = min(self.current_id + self.algo_config.playdata.eval_goal_gap, self.goal_image_length - 1)
-            goal_img = {'agentview_image': self.goal_image[self.goal_id:(self.goal_id+1)]}
+
+            goal_img = None
+            if self.algo_config.playdata.enabled:
+                self.goal_id = min(self.current_id + self.algo_config.playdata.eval_goal_gap, self.goal_image_length - 1)
+                goal_img = {'agentview_image': self.goal_image[self.goal_id:(self.goal_id+1)]}
+                self.current_id = self.find_nearest_index(obs_to_use['robot0_eef_pos'], self.current_id)
+
             action, mlp_feature = self.human_nets.policy._get_latent_plan(obs_to_use, goal_img)
             obs_to_use['latent_plan'] = mlp_feature.detach()
             obs_to_use['guidance'] = action.detach()
 
-            self.current_id = self.find_nearest_index(obs_to_use['robot0_eef_pos'], self.current_id)
-
         action = self.nets["policy"].forward_step(obs_to_use)
 
-        return action
+        if return_guidance:
+            return action, obs_to_use['guidance']
+        else:
+            return action
 
     def reset(self):
         """
