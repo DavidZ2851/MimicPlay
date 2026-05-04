@@ -9,6 +9,51 @@ import sys
 import numpy as np
 import argparse
 
+def inspect_action_deltas(filepath, demo_name="demo_0", threshold=1e-4):
+    """Inspect the delta (difference) between consecutive actions to find near-zero movements."""
+    with h5py.File(filepath, 'r') as f:
+        demo_path = f"data/{demo_name}"
+        if demo_path not in f:
+            print(f"Error: Demo '{demo_name}' not found.")
+            return
+
+        actions = f[demo_path]['actions'][:]  # shape: (T, action_dim)
+        T, D = actions.shape
+        print(f"\nDemo: {demo_name} | Steps: {T} | Action dim: {D}")
+        print("=" * 60)
+
+        deltas = np.diff(actions, axis=0)          # shape: (T-1, D)
+        norms  = np.linalg.norm(deltas, axis=1)    # shape: (T-1,)
+
+        print(f"\nAction-delta norms (||a[t+1] - a[t]||):")
+        print(f"  Min  : {norms.min():.6f}")
+        print(f"  Max  : {norms.max():.6f}")
+        print(f"  Mean : {norms.mean():.6f}")
+        print(f"  Std  : {norms.std():.6f}")
+
+        zero_mask = norms < threshold
+        zero_steps = np.where(zero_mask)[0]
+        print(f"\nNear-zero steps (norm < {threshold}): {len(zero_steps)} / {T-1}")
+        if len(zero_steps) > 0:
+            print(f"  Indices: {zero_steps[:50]}{'...' if len(zero_steps) > 50 else ''}")
+
+        # Per-dimension breakdown of deltas
+        print(f"\nPer-dim delta stats:")
+        print(f"{'Dim':<5} {'Min':>12} {'Max':>12} {'Mean':>12} {'Std':>12} {'#Zero':>8}")
+        print("-" * 60)
+        for i in range(D):
+            col = deltas[:, i]
+            n_zero = np.sum(np.abs(col) < threshold)
+            print(f"{i:<5} {col.min():>12.6f} {col.max():>12.6f} {col.mean():>12.6f} {col.std():>12.6f} {n_zero:>8}")
+
+        # Optional: show a step-by-step table around zero-movement regions
+        if len(zero_steps) > 0 and len(zero_steps) <= 30:
+            print(f"\nStep-by-step around near-zero movements:")
+            print(f"{'Step':>6} {'Norm':>12}  Action[t]")
+            print("-" * 60)
+            for idx in zero_steps:
+                print(f"{idx:>6} {norms[idx]:>12.6f}  {np.round(actions[idx], 4)}")
+
 
 def print_attrs(obj, indent=0):
     """Print attributes of an HDF5 object"""
@@ -73,6 +118,7 @@ def inspect_demo(filepath, demo_name):
     """Inspect a single demo"""
     with h5py.File(filepath, 'r') as f:
         demo_path = f"data/{demo_name}"
+        breakpoint()
         if demo_path not in f:
             print(f"Error: Demo '{demo_name}' not found.")
             print(f"Available demos: {list(f['data'].keys())[:10]}...")
@@ -120,12 +166,17 @@ def summary_h5(filepath):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inspect HDF5 file")
     parser.add_argument("filepath", help="Path to HDF5 file")
-    parser.add_argument("--demo", type=str, default=None, help="Inspect single demo (e.g., demo_0)")
+    parser.add_argument("--demo", type=str, default="demo_0", help="Inspect single demo (e.g., demo_0)")
+    parser.add_argument("--action-deltas", action="store_true", help="Inspect inter-action deltas")
+    parser.add_argument("--threshold", type=float, default=1e-4, help="Threshold for near-zero delta (default: 1e-4)")
+
     
     args = parser.parse_args()
     
     try:
-        if args.demo:
+        if args.action_deltas:
+            inspect_action_deltas(args.filepath, demo_name=args.demo, threshold=args.threshold)
+        elif args.demo:
             inspect_demo(args.filepath, args.demo)
         else:
             summary_h5(args.filepath)

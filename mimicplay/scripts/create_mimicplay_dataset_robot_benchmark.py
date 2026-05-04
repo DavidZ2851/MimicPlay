@@ -141,6 +141,7 @@ def process_episode(episode_dir, target_size=(84, 84)):
     
     states_ee = traj_data['states_ee'].astype(np.float64)[:-1]  # (T-1, 8)
     gripper = traj_data['gripper_width'].astype(np.float64)[:-1] # (T-1, 1)
+    breakpoint()
     delta_action_ee = traj_data['delta_action'].astype(np.float64)  # (T-1, 7)
     
     T = states_ee.shape[0]
